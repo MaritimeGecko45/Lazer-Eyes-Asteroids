@@ -1,6 +1,8 @@
 /*
- * 👾 Eye-Laser + Asteroid Dodge (Mirrored)
- * Mirrors body horizontally so movement feels like looking into a mirror.
+ * 👾 Eye-Laser + Asteroid Dodge (Mirrored) with Scoring
+ * Score increases for every asteroid destroyed.
+ * Bigger asteroids give more points.
+ * High score displayed above current score.
  */
 
 let video;
@@ -12,8 +14,12 @@ let asteroids = [];
 const ASTEROID_SPAWN_RATE = 0.02;
 const ASTEROID_SPEED_MIN = 1;
 const ASTEROID_SPEED_MAX = 3;
-const ASTEROID_SIZE_MIN = 25;
-const ASTEROID_SIZE_MAX = 60;
+const ASTEROID_SIZE_MIN = 10;
+const ASTEROID_SIZE_MAX = 200;
+
+// scoring
+let score = 0;
+let highScore = 0;
 
 function preload() {
   bodyPose = ml5.bodyPose();
@@ -30,10 +36,10 @@ function setup() {
 function draw() {
   background(30);
 
-  // spawn asteroids
+  // spawn asteroids randomly
   if (random() < ASTEROID_SPAWN_RATE) spawnAsteroid();
 
-  // draw asteroids
+  // update and draw asteroids
   for (let a of asteroids) {
     a.x += a.vx;
     a.y += a.vy;
@@ -42,16 +48,33 @@ function draw() {
     ellipse(a.x, a.y, a.r * 2);
   }
 
-  // mirrored draw heads + lasers
+  // draw mirrored heads and lasers
   drawHeadsAndLasers();
 
-  // check asteroid → head collisions
-  handleAsteroidCollisions();
+  // check collisions
+  const hit = handleAsteroidCollisions();
+  if (hit) {
+    if (score > highScore) highScore = score;
+    score = 0;
+  }
 
-  // cleanup
+ // display high score above current score
+noStroke();
+fill(255);
+textSize(16); // lowered text size
+textAlign(RIGHT, TOP);
+text(`High Score: ${Math.floor(highScore)}`, width - 20, 20);
+
+// display current score
+textSize(32);
+text(`${Math.floor(score)}`, width - 20, 40);
+
+
+  // cleanup off-screen asteroids
   asteroids = asteroids.filter(a => a.x > -100 && a.x < width + 100 && a.y > -100 && a.y < height + 100);
 }
 
+// ----- HEADS AND LASERS -----
 function drawHeadsAndLasers() {
   for (let p = 0; p < poses.length; p++) {
     const mirrored = mirrorPose(poses[p]);
@@ -59,17 +82,17 @@ function drawHeadsAndLasers() {
     const rightEye = mirrored.keypoints.find(k => k.name === "right_eye");
 
     if (leftEye && rightEye && leftEye.confidence > 0.5 && rightEye.confidence > 0.5) {
-      // HEAD DRAWING
       const headX = (leftEye.x + rightEye.x) / 2;
       const headY = (leftEye.y + rightEye.y) / 2;
       const headSize = dist(leftEye.x, leftEye.y, rightEye.x, rightEye.y) * 2;
 
+      // draw head
       fill(255, 255, 0, 180);
       stroke(0);
       strokeWeight(2);
       ellipse(headX, headY, headSize, headSize);
 
-      // HEAD DIRECTION
+      // calculate direction
       const dir = getHeadDirection(mirrored);
       if (dir) {
         fireLaser(leftEye.x, leftEye.y, dir.x, dir.y);
@@ -79,14 +102,12 @@ function drawHeadsAndLasers() {
   }
 }
 
-// ----- Pose utilities -----
+// ----- MIRROR POSE -----
 function mirrorPose(pose) {
-  // deep clone keypoints to avoid mutating ml5 data
   const cloned = { ...pose, keypoints: [] };
   for (let kp of pose.keypoints) {
     cloned.keypoints.push({
       ...kp,
-      // flip horizontally around canvas center
       x: width - kp.x,
       y: kp.y
     });
@@ -94,7 +115,7 @@ function mirrorPose(pose) {
   return cloned;
 }
 
-// Estimate facing: nose → midpoint(ears) fallback shoulders
+// ----- HEAD DIRECTION -----
 function getHeadDirection(pose) {
   const nose = pose.keypoints.find(k => k.name === "nose");
   const leftEar = pose.keypoints.find(k => k.name === "left_ear");
@@ -102,10 +123,8 @@ function getHeadDirection(pose) {
 
   if (nose && nose.confidence > 0.5 && leftEar && rightEar &&
       leftEar.confidence > 0.5 && rightEar.confidence > 0.5) {
-
     const midEarX = (leftEar.x + rightEar.x) / 2;
     const midEarY = (leftEar.y + rightEar.y) / 2;
-
     const dx = nose.x - midEarX;
     const dy = nose.y - midEarY;
     const mag = sqrt(dx * dx + dy * dy);
@@ -124,9 +143,11 @@ function getHeadDirection(pose) {
     const mag = sqrt(dx * dx + dy * dy);
     if (mag > 0) return { x: dx / mag, y: dy / mag };
   }
+
   return null;
 }
 
+// ----- FIRE LASER -----
 function fireLaser(startX, startY, dirX, dirY) {
   const endX = startX + dirX * 1000;
   const endY = startY + dirY * 1000;
@@ -140,30 +161,38 @@ function fireLaser(startX, startY, dirX, dirY) {
   line(startX, startY, endX, endY);
 
   for (let a of asteroids) {
-    if (pointLineDist(a.x, a.y, startX, startY, endX, endY) < a.r) a.dead = true;
+    if (pointLineDist(a.x, a.y, startX, startY, endX, endY) < a.r) {
+      a.dead = true;
+      score += a.r; // bigger asteroids give more points
+    }
   }
   asteroids = asteroids.filter(a => !a.dead);
 }
 
+// ----- ASTEROID COLLISIONS -----
 function handleAsteroidCollisions() {
-  if (poses.length === 0) return;
+  if (poses.length === 0) return false;
   const mirrored = mirrorPose(poses[0]);
   const leftEye = mirrored.keypoints.find(k => k.name === "left_eye");
   const rightEye = mirrored.keypoints.find(k => k.name === "right_eye");
-  if (!leftEye || !rightEye) return;
+  if (!leftEye || !rightEye) return false;
 
   const headX = (leftEye.x + rightEye.x) / 2;
   const headY = (leftEye.y + rightEye.y) / 2;
   const headR = dist(leftEye.x, leftEye.y, rightEye.x, rightEye.y);
 
+  let hit = false;
   for (let a of asteroids) {
     if (dist(a.x, a.y, headX, headY) < a.r + headR) {
       fill(255, 0, 0, 120);
       rect(0, 0, width, height);
+      hit = true;
     }
   }
+  return hit;
 }
 
+// ----- SPAWN ASTEROIDS -----
 function spawnAsteroid() {
   const edge = floor(random(4));
   let x, y;
@@ -181,6 +210,7 @@ function spawnAsteroid() {
   asteroids.push({ x, y, vx, vy, r });
 }
 
+// ----- UTILITY -----
 function pointLineDist(px, py, x1, y1, x2, y2) {
   const A = px - x1, B = py - y1, C = x2 - x1, D = y2 - y1;
   const dot = A * C + B * D;
